@@ -1,348 +1,300 @@
-﻿from flask import Flask, jsonify, request, send_file
-from flask_cors import CORS
-import sqlite3
-import os
-import pandas as pd
-import io
+import { useEffect, useState } from "react";
 
-app = Flask(__name__)
-CORS(app)
+export default function Inventory() {
+  const [parts, setParts] = useState([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [vehicleFilter, setVehicleFilter] = useState("All");
+  const [message, setMessage] = useState("");
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE = os.path.join(BASE_DIR, "database.db")
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
 
-def get_connection():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
+  useEffect(() => {
+    loadParts();
+  }, []);
 
-def upgrade_database():
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
+  async function loadParts() {
+    try {
+      const response = await fetch("/api/parts");
+      const data = await response.json();
+      setParts(data);
+    } catch (error) {
+      console.error("Error loading parts:", error);
+    }
+  }
 
-    # Original schema alterations
-    try:
-        cursor.execute("ALTER TABLE purchases ADD COLUMN is_adjustment INTEGER DEFAULT 0")
-    except Exception:
-        pass
+  function startEdit(part) {
+    setEditingId(part.id);
+    setEditForm({ ...part });
+  }
 
-    try:
-        cursor.execute("ALTER TABLE purchases ADD COLUMN reason TEXT")
-    except Exception:
-        pass
+  function cancelEdit() {
+    setEditingId(null);
+    setEditForm(null);
+  }
 
-    try:
-        cursor.execute("ALTER TABLE sales ADD COLUMN is_adjustment INTEGER DEFAULT 0")
-    except Exception:
-        pass
+  async function saveEdit() {
+    try {
+      const response = await fetch(`/api/parts/${encodeURIComponent(editForm.part_number)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editForm),
+      });
+      const data = await response.json();
 
-    try:
-        cursor.execute("ALTER TABLE sales ADD COLUMN reason TEXT")
-    except Exception:
-        pass
+      if (data.success) {
+        setMessage("Part updated successfully.");
+        cancelEdit();
+        loadParts();
+      } else {
+        setMessage(data.message || "Failed to update part.");
+      }
+    } catch (error) {
+      console.error(error);
+      setMessage("Failed to update part.");
+    }
+  }
 
-    # Page expansion updates (Invoices, Customers, and Machine variants)
-    try:
-        cursor.execute("ALTER TABLE sales ADD COLUMN invoice_number TEXT")
-    except Exception:
-        pass
+  async function deletePart(part) {
+    if (!window.confirm(`Delete part ${part.part_number}? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/parts/${encodeURIComponent(part.part_number)}`, {
+        method: "DELETE",
+      });
+      const data = await response.json();
 
-    try:
-        cursor.execute("ALTER TABLE sales ADD COLUMN customer_name TEXT")
-    except Exception:
-        pass
+      if (data.success) {
+        setMessage("Part deleted.");
+        loadParts();
+      } else {
+        setMessage(data.message || "Failed to delete part.");
+      }
+    } catch (error) {
+      console.error(error);
+      setMessage("Failed to delete part.");
+    }
+  }
 
-    try:
-        cursor.execute("ALTER TABLE parts ADD COLUMN vehicle_model TEXT DEFAULT 'General'")
-    except Exception:
-        pass
+  const vehicleModels = [
+    "All",
+    ...Array.from(new Set(parts.map((p) => p.vehicle_model || "General"))),
+  ];
 
-    conn.commit()
-    conn.close()
+  const filteredParts = parts.filter((part) => {
+    const q = searchQuery.toLowerCase();
+    const matchesSearch =
+      String(part.part_number || "").toLowerCase().includes(q) ||
+      String(part.brand || "").toLowerCase().includes(q);
+    const matchesVehicle =
+      vehicleFilter === "All" || (part.vehicle_model || "General") === vehicleFilter;
+    return matchesSearch && matchesVehicle;
+  });
 
-def init_supplier_table():
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS suppliers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            contact_person TEXT,
-            phone TEXT,
-            email TEXT,
-            gst_number TEXT,
-            brands_supplied TEXT,
-            address TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+  return (
+    <div>
+      <h1 className="text-6xl font-bold text-white">Inventory</h1>
+      <p className="text-gray-400 mt-3 mb-10 text-xl">
+        Manage and monitor all parts in stock.
+      </p>
 
-# Run database setup structures automatically on spin-up
-upgrade_database()
-init_supplier_table()
+      {/* Search & Filters */}
+      <div className="flex gap-4 mb-8">
+        <input
+          type="text"
+          placeholder="Search part number or brand..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-96 px-5 py-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-xl outline-none text-white focus:border-blue-500/50 transition-all"
+        />
 
+        <select
+          value={vehicleFilter}
+          onChange={(e) => setVehicleFilter(e.target.value)}
+          className="px-5 py-3 rounded-2xl bg-[#151D2B] border border-white/10 text-white outline-none cursor-pointer"
+        >
+          {vehicleModels.map((model) => (
+            <option key={model} value={model}>
+              {model === "All" ? "All Vehicles" : model}
+            </option>
+          ))}
+        </select>
+      </div>
 
-@app.route("/parts")
-def get_parts():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM parts ORDER BY part_number")
-    parts = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return jsonify(parts)
+      {message && (
+        <div className={`mb-6 font-medium ${message.includes("success") || message.includes("deleted") ? "text-emerald-400" : "text-rose-400"}`}>
+          {message}
+        </div>
+      )}
 
+      {/* Table */}
+      <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl overflow-hidden">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-white/10 text-gray-400 text-left">
+              <th className="p-5">Part Number</th>
+              <th className="p-5">Brand</th>
+              <th className="p-5">Vehicle</th>
+              <th className="p-5">Stock</th>
+              <th className="p-5">Purchase Price</th>
+              <th className="p-5">Selling Price</th>
+              <th className="p-5">Status</th>
+              <th className="p-5">Actions</th>
+            </tr>
+          </thead>
 
-@app.route("/purchase", methods=["POST"])
-def add_purchase():
-    data = request.json
-    print("PURCHASE DATA:", data)
+          <tbody>
+            {filteredParts.map((part) => {
+              const isEditing = editingId === part.id;
+              return (
+                <tr
+                  key={part.id}
+                  className="border-b border-white/5 hover:bg-white/5 transition text-white"
+                >
+                  <td className="p-5 font-mono text-cyan-400">{part.part_number}</td>
 
-    part_number = data["part_number"]
-    brand = data.get("brand", "")
-    quantity = int(data["quantity"])
-    unit_cost = float(data["unit_cost"])
-    date = data["date"]
-    vehicle_model = data.get("vehicle_model", "General")
+                  <td className="p-5">
+                    {isEditing ? (
+                      <input
+                        value={editForm.brand || ""}
+                        onChange={(e) => setEditForm({ ...editForm, brand: e.target.value })}
+                        className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 outline-none text-white w-32"
+                      />
+                    ) : (
+                      part.brand || "—"
+                    )}
+                  </td>
 
-    is_adjustment = 1 if data.get("is_adjustment") else 0
-    reason = data.get("reason", "")
+                  <td className="p-5">
+                    {isEditing ? (
+                      <input
+                        value={editForm.vehicle_model || ""}
+                        onChange={(e) => setEditForm({ ...editForm, vehicle_model: e.target.value })}
+                        className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 outline-none text-white w-32"
+                      />
+                    ) : (
+                      part.vehicle_model || "General"
+                    )}
+                  </td>
 
-    conn = get_connection()
-    cursor = conn.cursor()
+                  <td className="p-5">
+                    {isEditing ? (
+                      <input
+                        type="number"
+                        min="0"
+                        value={editForm.stock ?? 0}
+                        onChange={(e) => setEditForm({ ...editForm, stock: Number(e.target.value) })}
+                        className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 outline-none text-white w-24"
+                      />
+                    ) : (
+                      part.stock
+                    )}
+                  </td>
 
-    cursor.execute("""
-        INSERT INTO purchases (date, part_number, quantity, unit_cost, is_adjustment, reason)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (date, part_number, quantity, unit_cost, is_adjustment, reason))
+                  <td className="p-5">
+                    {isEditing ? (
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={editForm.purchase_price ?? ""}
+                        onChange={(e) => setEditForm({ ...editForm, purchase_price: Number(e.target.value) })}
+                        className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 outline-none text-white w-28"
+                      />
+                    ) : (
+                      `₹${(part.purchase_price || 0).toLocaleString("en-IN")}`
+                    )}
+                  </td>
 
-    cursor.execute("SELECT part_number FROM parts WHERE part_number = ?", (part_number,))
-    part = cursor.fetchone()
+                  <td className="p-5">
+                    {isEditing ? (
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={editForm.selling_price ?? ""}
+                        onChange={(e) => setEditForm({ ...editForm, selling_price: Number(e.target.value) })}
+                        className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 outline-none text-white w-28"
+                      />
+                    ) : (
+                      `₹${(part.selling_price || 0).toLocaleString("en-IN")}`
+                    )}
+                  </td>
 
-    if part:
-        cursor.execute("""
-            UPDATE parts
-            SET stock = stock + ?, vehicle_model = ?
-            WHERE part_number = ?
-        """, (quantity, vehicle_model, part_number))
-    else:
-        cursor.execute("""
-            INSERT INTO parts (part_number, brand, stock, purchase_price, vehicle_model)
-            VALUES (?, ?, ?, ?, ?)
-        """, (part_number, brand, quantity, unit_cost, vehicle_model))
+                  <td className="p-5">
+                    <StatusBadge stock={part.stock} />
+                  </td>
 
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True, "message": "Purchase saved"})
+                  <td className="p-5">
+                    {isEditing ? (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={saveEdit}
+                          className="px-3 py-2 rounded-lg bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-600 hover:text-white transition"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          className="px-3 py-2 rounded-lg bg-white/5 text-gray-300 border border-white/10 hover:bg-white/10 transition"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => startEdit(part)}
+                          className="px-3 py-2 rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 hover:bg-blue-600 hover:text-white transition"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => deletePart(part)}
+                          className="px-3 py-2 rounded-lg bg-rose-600/20 text-rose-400 border border-rose-500/30 hover:bg-rose-600 hover:text-white transition"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
 
+            {filteredParts.length === 0 && (
+              <tr>
+                <td colSpan="8" className="text-center p-10 text-gray-500">
+                  No parts match your search.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
-@app.route("/sale", methods=["POST"])
-def add_sale():
-    data = request.json
-    part_number = data["part_number"]
-    quantity = int(data["quantity"])
-    selling_price = float(data["selling_price"])
-    date = data["date"]
-    invoice_number = data.get("invoice_number", "")
-    customer_name = data.get("customer_name", "")
-
-    is_adjustment = 1 if data.get("is_adjustment") else 0
-    reason = data.get("reason", "")
-
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT stock FROM parts WHERE part_number = ?", (part_number,))
-    part = cursor.fetchone()
-
-    if not part:
-        conn.close()
-        return jsonify({"success": False, "message": "Part not found"})
-
-    current_stock = part["stock"]
-    if quantity > current_stock:
-        conn.close()
-        return jsonify({"success": False, "message": "Insufficient stock"})
-
-    cursor.execute("""
-        INSERT INTO sales (date, part_number, quantity, selling_price, is_adjustment, reason, invoice_number, customer_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (date, part_number, quantity, selling_price, is_adjustment, reason, invoice_number, customer_name))
-
-    cursor.execute("UPDATE parts SET stock = stock - ? WHERE part_number = ?", (quantity, part_number))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True, "message": "Sale recorded"})
-
-
-@app.route("/purchases")
-def get_purchases():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM purchases ORDER BY id DESC")
-    purchases = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return jsonify(purchases)
-
-
-@app.route("/sales")
-def get_sales():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM sales ORDER BY id DESC")
-    sales = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return jsonify(sales)
-
-
-@app.route("/dashboard")
-def dashboard():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT COUNT(*) FROM parts")
-    total_parts = cursor.fetchone()[0]
-
-    cursor.execute("SELECT SUM(stock) FROM parts")
-    total_units_raw = cursor.fetchone()[0]
-    total_units = total_units_raw if total_units_raw is not None else 0
-
-    cursor.execute("SELECT COUNT(*) FROM parts WHERE stock > 0 AND stock <= 2")
-    low_stock = cursor.fetchone()[0]
-
-    cursor.execute("SELECT SUM(COALESCE(stock,0) * COALESCE(purchase_price,0)) FROM parts")
-    inventory_value_raw = cursor.fetchone()[0]
-    inventory_value = inventory_value_raw if inventory_value_raw is not None else 0
-
-    conn.close()
-    return jsonify({
-        "total_parts": total_parts,
-        "total_units": total_units,
-        "low_stock": low_stock,
-        "inventory_value": round(inventory_value, 2)
-    })
-
-
-# FIXED: Accepts part_name (part_number text key string) to handle row edit lookups seamlessly
-@app.route("/parts/<string:part_name>", methods=["PUT"])
-def update_part(part_name):
-    data = request.json
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE parts
-        SET part_number = ?, 
-            brand = ?, 
-            stock = ?, 
-            purchase_price = ?, 
-            selling_price = ?, 
-            vehicle_model = ?
-        WHERE part_number = ?
-    """, (
-        data.get("part_number"), data.get("brand"), data.get("stock"),
-        data.get("purchase_price"), data.get("selling_price"),
-        data.get("vehicle_model", "General"), part_name
-    ))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True, "message": "Part updated"})
-
-
-@app.route("/parts/<string:part_name>", methods=["DELETE"])
-def delete_part(part_name):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM parts WHERE part_number = ?", (part_name,))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True, "message": "Part deleted"})
-
-
-@app.route("/supplier", methods=["POST"])
-def add_supplier():
-    data = request.json
-    name = data.get("name", "").strip()
-    if not name:
-        return jsonify({"success": False, "message": "Supplier Name is required."}), 400
-
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO suppliers (name, contact_person, phone, email, gst_number, brands_supplied, address)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (name, data.get("contact_person", ""), data.get("phone", ""), data.get("email", ""), data.get("gst_number", ""), data.get("brands_supplied", ""), data.get("address", "")))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True, "message": "Supplier Saved Successfully."})
-
-
-@app.route("/suppliers")
-def get_suppliers():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM suppliers ORDER BY name ASC")
-    suppliers = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return jsonify(suppliers)
-
-
-@app.route("/import-excel", methods=["POST"])
-def import_excel():
-    if "file" not in request.files:
-        return jsonify({"success": False, "message": "No file provided"}), 400
-    file = request.files["file"]
-    if file.filename == "":
-        return jsonify({"success": False, "message": "No file selected"}), 400
-
-    try:
-        df = pd.read_excel(file)
-        conn = get_connection()
-        cursor = conn.cursor()
-        for _, row in df.iterrows():
-            part_number = str(row.get("part_number", "")).strip()
-            brand = str(row.get("brand", "")).strip()
-            stock = int(row.get("stock", 0))
-            purchase_price = float(row.get("purchase_price", 0.0))
-            vehicle_model = str(row.get("vehicle_model", "General")).strip()
-
-            if not part_number:
-                continue
-            cursor.execute("SELECT part_number FROM parts WHERE part_number = ?", (part_number,))
-            if cursor.fetchone():
-                cursor.execute("UPDATE parts SET stock = ?, brand = ?, purchase_price = ?, vehicle_model = ? WHERE part_number = ?", (stock, brand, purchase_price, vehicle_model, part_number))
-            else:
-                cursor.execute("INSERT INTO parts (part_number, brand, stock, purchase_price, vehicle_model) VALUES (?, ?, ?, ?, ?)", (part_number, brand, stock, purchase_price, vehicle_model))
-        conn.commit()
-        conn.close()
-        return jsonify({"success": True, "message": "Excel data successfully imported!"})
-    except Exception as e:
-        return jsonify({"success": False, "message": f"Processing error: {str(e)}"}), 500
-
-
-@app.route("/export-excel")
-def export_excel():
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT part_number, brand, stock, purchase_price, vehicle_model FROM parts")
-        parts_list = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-
-        df = pd.DataFrame(parts_list)
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Inventory")
-        output.seek(0)
-
-        return send_file(
-            output,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            as_attachment=True,
-            download_name="inventory_export.xlsx"
-        )
-    except Exception as e:
-        return jsonify({"success": False, "message": f"Export failed: {str(e)}"}), 500
-
-
-if __name__ == "__main__":
-    print("APP STARTED — STABLE RE-LINKED ENGINE WORKING")
-    app.run(debug=True)
+function StatusBadge({ stock }) {
+  if (stock === 0) {
+    return (
+      <span className="bg-rose-500/10 text-rose-400 border border-rose-500/20 px-3 py-1 rounded-full text-xs font-semibold">
+        Out of Stock
+      </span>
+    );
+  }
+  if (stock <= 2) {
+    return (
+      <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 px-3 py-1 rounded-full text-xs font-semibold">
+        Low Stock
+      </span>
+    );
+  }
+  return (
+    <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full text-xs font-semibold">
+      In Stock
+    </span>
+  );
+}
